@@ -42,6 +42,13 @@ interface PRDashboardProps {
       centralityScore: number;
     };
     traversalPath: string[];
+    githubPR?: {
+      number: number;
+      url: string;
+      title: string;
+      branch: string;
+      state: string;
+    };
   };
 }
 
@@ -324,6 +331,17 @@ export function PRDashboard({ data }: PRDashboardProps) {
               </div>
             </div>
             <div className="flex gap-2 shrink-0">
+              {data.githubPR && (
+                <a
+                  href={data.githubPR.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-semibold transition-colors"
+                >
+                  View PR #{data.githubPR.number}
+                  <ChevronRight className="w-3 h-3" />
+                </a>
+              )}
               <button
                 onClick={handleReplay}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600/20 hover:bg-violet-600/30 text-violet-300 hover:text-violet-200 text-xs font-medium transition-colors border border-violet-500/20"
@@ -334,10 +352,6 @@ export function PRDashboard({ data }: PRDashboardProps) {
               <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 hover:text-white/90 text-xs font-medium transition-colors border border-white/[0.06]">
                 <Download className="w-3 h-3" />
                 Export
-              </button>
-              <button className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-semibold transition-colors">
-                Create PR
-                <ChevronRight className="w-3 h-3" />
               </button>
             </div>
           </div>
