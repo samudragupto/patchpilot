@@ -11,15 +11,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ==============================
+      # 1. Checkout code
+      # ==============================
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      # ==============================
+      # 2. Install tools
+      # ==============================
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
 
-      # 🔐 LOGIN TO IBM CONTAINER REGISTRY (MISSING IN YOUR VERSION)
+      # ==============================
+      # 3. Debug (IMPORTANT)
+      # ==============================
+      - name: Debug workspace
+        run: |
+          echo "Current directory:"
+          pwd
+          echo "Files:"
+          ls -la
+          echo "Dockerfile check:"
+          cat Dockerfile || echo "Dockerfile NOT FOUND"
+
+      # ==============================
+      # 4. IBM Container Registry Login
+      # ==============================
       - name: Login to IBM Container Registry
         uses: docker/login-action@v3
         with:
@@ -27,8 +49,13 @@ jobs:
           username: iamapikey
           password: ${{ secrets.IBM_CLOUD_API_KEY }}
 
+      # ==============================
+      # 5. Generate IAM Token
+      # ==============================
       - name: Generate IAM Token
         run: |
+          echo "Generating IAM token..."
+
           RESPONSE=$(curl -s -X POST "${{ vars.IAM_URL }}/identity/token" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${{ secrets.IBM_CLOUD_API_KEY }}")
@@ -36,25 +63,33 @@ jobs:
           TOKEN=$(echo $RESPONSE | jq -r '.access_token')
 
           if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
-            echo "IAM Token generation failed"
+            echo "IAM token generation failed"
+            echo "$RESPONSE"
             exit 1
           fi
 
           echo "IAM_TOKEN=$TOKEN" >> $GITHUB_ENV
+          echo "::add-mask::$TOKEN"
 
+      # ==============================
+      # 6. Build Docker Image
+      # ==============================
       - name: Build & Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile   # 🔥 CRITICAL FIX
+          file: ./Dockerfile
           push: true
           tags: |
             ${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:latest
             ${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:${{ github.sha }}
 
-      - name: Trigger Code Engine Deployment
+      # ==============================
+      # 7. Deploy to Code Engine
+      # ==============================
+      - name: Deploy to IBM Code Engine
         run: |
-          echo "Deploying to IBM Code Engine..."
+          echo "Deploying application..."
 
           curl -X POST \
           "${{ vars.IBM_CLOUD_CODE_ENGINE_API }}/v2/projects/${{ secrets.IBM_CLOUD_PROJECT_ID }}/applications/patchpilot/revisions" \
@@ -65,5 +100,8 @@ jobs:
             \"port\": 3000
           }"
 
+      # ==============================
+      # 8. Success
+      # ==============================
       - name: Deployment Success
         run: echo "PatchPilot deployed successfully 🚀"
