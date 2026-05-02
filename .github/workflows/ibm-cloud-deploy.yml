@@ -3,7 +3,6 @@ name: PatchPilot IBM Cloud Production Deployment
 on:
   pull_request:
     branches: [ main ]
-    types: [ closed ]
 
 jobs:
   deploy:
