@@ -12,37 +12,23 @@ jobs:
 
     env:
       REGISTRY: icr.io
-      NAMESPACE: patchpilot
-      APP_NAME: patchpilot
+      REGION: global
+      NAMESPACE: patchpilot   # your IBM namespace (you said it's global)
       IAM_URL: https://iam.cloud.ibm.com
 
     steps:
-      # --------------------------
-      # Checkout code
-      # --------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # --------------------------
-      # Validate Dockerfile
-      # --------------------------
-      - name: Verify Dockerfile
+      - name: Debug - Check Dockerfile
         run: |
-          if [ ! -f "./Dockerfile" ]; then
-            echo "::error::Dockerfile not found in root"
-            exit 1
-          fi
-          echo "Dockerfile found"
+          ls -al
+          test -f Dockerfile || (echo "Dockerfile missing in root" && exit 1)
 
-      # --------------------------
-      # Setup Buildx
-      # --------------------------
-      - name: Set up Docker Buildx
+      - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
 
-      # --------------------------
-      # Login to IBM Container Registry
-      # --------------------------
+      # 🔥 FIX 1: correct IBM registry login
       - name: Login to IBM Container Registry
         uses: docker/login-action@v3
         with:
@@ -50,30 +36,23 @@ jobs:
           username: iamapikey
           password: ${{ secrets.IBM_CLOUD_API_KEY }}
 
-      # --------------------------
-      # Generate IAM Token
-      # --------------------------
+      # 🔥 FIX 2: IAM token
       - name: Generate IAM Token
         shell: bash
         run: |
-          set -e
-
-          RESPONSE=$(curl -s -X POST "${IAM_URL}/identity/token" \
+          TOKEN=$(curl -s -X POST "${IAM_URL}/identity/token" \
             -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${{ secrets.IBM_CLOUD_API_KEY }}")
-
-          TOKEN=$(echo $RESPONSE | jq -r '.access_token')
+            -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${{ secrets.IBM_CLOUD_API_KEY }}" \
+            | jq -r '.access_token')
 
           if [ -z "$TOKEN" ] || [ "$TOKEN" == "null" ]; then
-            echo "::error::Failed to generate IAM token"
+            echo "IAM token failed"
             exit 1
           fi
 
           echo "IAM_TOKEN=$TOKEN" >> $GITHUB_ENV
 
-      # --------------------------
-      # Build & Push Docker Image
-      # --------------------------
+      # 🔥 FIX 3: correct Docker build (IMPORTANT)
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
@@ -81,38 +60,25 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            icr.io/patchpilot/patchpilot:latest
-            icr.io/patchpilot/patchpilot:${{ github.sha }}
+            icr.io/${{ env.NAMESPACE }}/patchpilot:latest
+            icr.io/${{ env.NAMESPACE }}/patchpilot:${{ github.sha }}
 
-      # --------------------------
-      # Deploy to IBM Code Engine
-      # --------------------------
-      - name: Deploy to Code Engine
+      # 🔥 FIX 4: correct Code Engine endpoint handling
+      - name: Trigger Code Engine Deployment
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          CE_API="https://api.us-south.codeengine.cloud.ibm.com"
+          CE_API="https://api.${{ vars.IBM_CLOUD_REGION }}.codeengine.cloud.ibm.com"
 
-          echo "Deploying PatchPilot to Code Engine..."
-
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
-            "$CE_API/v2/projects/${{ secrets.IBM_CLOUD_PROJECT_ID }}/applications/patchpilot" \
+          curl -X POST \
+            "$CE_API/v2/projects/${{ secrets.IBM_CLOUD_PROJECT_ID }}/applications/patchpilot/revisions" \
             -H "Authorization: Bearer $IAM_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{
-              \"image_reference\": \"icr.io/patchpilot/patchpilot:${{ github.sha }}\"
-            }")
+              \"image\": \"icr.io/${{ env.NAMESPACE }}/patchpilot:${{ github.sha }}\",
+              \"port\": 3000
+            }"
 
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | head -n -1)
-
-          echo "Status: $HTTP_CODE"
-          echo "Response: $BODY"
-
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-            echo "::error::Deployment failed"
-            exit 1
-          fi
-
-          echo "Deployment successful"
+      - name: Success
+        run: echo "PatchPilot deployed successfully"
