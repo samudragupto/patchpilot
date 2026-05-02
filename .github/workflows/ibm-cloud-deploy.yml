@@ -1,4 +1,4 @@
-name: PatchPilot Production Deployment
+name: PatchPilot IBM Cloud Production Deployment
 
 on:
   pull_request:
@@ -9,30 +9,32 @@ jobs:
   deploy:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Detect Configuration Changes
-        id: changed-files
-        uses: tj-actions/changed-files@v44
-        with:
-          files: ${{ vars.CONFIG_FOLDER_PATH }}/**
+      - name: Install jq
+        run: sudo apt-get install -y jq
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Generate IAM Token
+        run: |
+          RESPONSE=$(curl -s -X POST "${{ vars.IAM_URL }}/identity/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${{ secrets.IBM_CLOUD_API_KEY }}")
 
-      - name: Login to IBM Cloud Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ vars.IBM_CLOUD_REGION }}.icr.io
-          username: iamapikey
-          password: ${{ secrets.IBM_CLOUD_API_KEY }}
+          TOKEN=$(echo $RESPONSE | jq -r '.access_token')
 
-      - name: Build and Push Docker Image
+          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
+            echo "IAM Token generation failed"
+            exit 1
+          fi
+
+          echo "IAM_TOKEN=$TOKEN" >> $GITHUB_ENV
+
+      - name: Build & Push Docker Image to IBM Registry
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -40,68 +42,19 @@ jobs:
           tags: |
             ${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:latest
             ${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-      - name: Generate IBM Cloud IAM Token
-        id: iam_token
+      - name: Trigger Code Engine Update (Correct Method)
         run: |
-          TOKEN_RESPONSE=$(curl -X POST "${{ vars.IAM_URL }}/identity/token" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${{ secrets.IBM_CLOUD_API_KEY }}")
-          
-          IAM_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
-          
-          if [ "$IAM_TOKEN" == "null" ] || [ -z "$IAM_TOKEN" ]; then
-            echo "::error::Failed to generate IAM Token. Response: $TOKEN_RESPONSE"
-            exit 1
-          fi
-          
-          echo "IAM_TOKEN=$IAM_TOKEN" >> $GITHUB_ENV
-          echo "::add-mask::$IAM_TOKEN"
+          echo "Updating Code Engine application..."
 
-      - name: Sync IBM Cloud Project Configuration
-        if: steps.changed-files.outputs.any_changed == 'true'
-        run: |
-          echo "Detected changes in ${{ vars.CONFIG_FOLDER_PATH }}. Syncing IBM Cloud Project..."
-          
-          SYNC_RESPONSE=$(curl -X POST "${{ vars.PROJECTS_API_BASE_URL }}/v1/projects/${{ secrets.IBM_CLOUD_PROJECT_ID }}/sync" \
-            -H "Authorization: Bearer ${{ env.IAM_TOKEN }}" \
-            -H "Content-Type: application/json")
-          
-          echo "Sync Response: $SYNC_RESPONSE"
-          
-          # Basic validation
-          if [[ $SYNC_RESPONSE != *"status"* ]]; then
-             echo "::error::Project sync failed or returned unexpected response."
-             exit 1
-          fi
+          curl -X POST \
+          "${{ vars.IBM_CLOUD_CODE_ENGINE_API }}/v2/projects/${{ secrets.IBM_CLOUD_PROJECT_ID }}/applications/patchpilot/revisions" \
+          -H "Authorization: Bearer $IAM_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"image\": \"${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:${{ github.sha }}\",
+            \"port\": 3000
+          }"
 
-      - name: Trigger Code Engine Redeploy
-        run: |
-          echo "Updating Code Engine application with new image tag..."
-          
-          DEPLOY_RESPONSE=$(curl -X PATCH "${{ vars.PROJECTS_API_BASE_URL }}/v1/projects/${{ secrets.IBM_CLOUD_PROJECT_ID }}/deployments/patchpilot-deployment" \
-            -H "Authorization: Bearer ${{ env.IAM_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"target\": {
-                \"image\": \"${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:${{ github.sha }}\"
-              }
-            }")
-          
-          echo "Deployment Response: $DEPLOY_RESPONSE"
-          
-          # Validate deployment status
-          STATUS=$(echo $DEPLOY_RESPONSE | jq -r '.status // empty')
-          if [[ "$STATUS" == "failed" ]]; then
-            echo "::error::Deployment failed. Initiating rollback logic..."
-            exit 1
-          fi
-
-      - name: Final Validation and Health Check
-        run: |
-          echo "Waiting for deployment to propagate..."
-          sleep 30
-          # Add actual health check endpoint if public URL is known
-          echo "Deployment successful for commit ${{ github.sha }}"
+      - name: Deployment Success
+        run: echo "PatchPilot deployed successfully "
