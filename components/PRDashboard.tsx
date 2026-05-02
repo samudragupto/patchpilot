@@ -74,7 +74,7 @@ function ExecutionFlow({ flow }: { flow: { before: { step: string; result: strin
           <span className="text-[11px] font-bold text-red-400 tracking-wider">BEFORE</span>
         </div>
         <div className="p-3 space-y-2">
-          {flow.before.map((item, i) => (
+          {Array.isArray(flow?.before) && flow.before.map((item, i) => (
             <motion.div
               key={i}
               initial={{ opacity: 0, x: -8 }}
@@ -84,11 +84,12 @@ function ExecutionFlow({ flow }: { flow: { before: { step: string; result: strin
             >
               <div className="text-[11px] font-mono text-white/25 shrink-0 mt-0.5">{String(i + 1).padStart(2, '0')}</div>
               <div>
-                <div className="text-[11px] font-mono text-white/60">{item.step}</div>
-                <div className="text-[10px] text-red-400/70 mt-0.5">→ {item.result}</div>
+                <div className="text-[11px] font-mono text-white/60">{item?.step}</div>
+                <div className="text-[10px] text-red-400/70 mt-0.5">→ {item?.result}</div>
               </div>
             </motion.div>
           ))}
+          {(!flow?.before || flow.before.length === 0) && <div className="text-[10px] text-white/20 italic p-2">No execution flow identified</div>}
         </div>
       </div>
 
@@ -99,7 +100,7 @@ function ExecutionFlow({ flow }: { flow: { before: { step: string; result: strin
           <span className="text-[11px] font-bold text-green-400 tracking-wider">AFTER</span>
         </div>
         <div className="p-3 space-y-2">
-          {flow.after.map((item, i) => (
+          {Array.isArray(flow?.after) && flow.after.map((item, i) => (
             <motion.div
               key={i}
               initial={{ opacity: 0, x: 8 }}
@@ -109,11 +110,12 @@ function ExecutionFlow({ flow }: { flow: { before: { step: string; result: strin
             >
               <div className="text-[11px] font-mono text-white/25 shrink-0 mt-0.5">{String(i + 1).padStart(2, '0')}</div>
               <div>
-                <div className="text-[11px] font-mono text-white/60">{item.step}</div>
-                <div className="text-[10px] text-green-400/70 mt-0.5">→ {item.result}</div>
+                <div className="text-[11px] font-mono text-white/60">{item?.step}</div>
+                <div className="text-[10px] text-green-400/70 mt-0.5">→ {item?.result}</div>
               </div>
             </motion.div>
           ))}
+          {(!flow?.after || flow.after.length === 0) && <div className="text-[10px] text-white/20 italic p-2">Awaiting reasoning completion...</div>}
         </div>
       </div>
     </div>
@@ -135,7 +137,7 @@ function ReasoningChain({ reasoning }: { reasoning: PRDashboardProps['data']['re
         </h4>
         <div className="space-y-2">
           {Array.isArray(reasoning?.hypotheses) && reasoning.hypotheses.map((h, i) => {
-            const isEliminated = eliminatedIds.has(h.id);
+            const isEliminated = Array.isArray(reasoning?.eliminations) && reasoning.eliminations.some(e => e.hypothesisId === h.id);
             const isFinal = h.id === reasoning?.finalHypothesis?.id;
             return (
               <motion.div
@@ -416,12 +418,15 @@ export function PRDashboard({ data }: PRDashboardProps) {
                     Defensive Improvements
                   </h3>
                   <div className="space-y-2">
-                    {data.defensiveImprovements.map((item, i) => (
+                    {Array.isArray(data?.defensiveImprovements) && data.defensiveImprovements.map((item, i) => (
                       <div key={i} className="flex items-start gap-2.5 p-3 rounded-lg bg-blue-500/5 border border-blue-500/10 text-[12px] text-white/60">
                         <CheckCircle2 className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
                         {item}
                       </div>
                     ))}
+                    {(!data?.defensiveImprovements || data.defensiveImprovements.length === 0) && (
+                      <div className="text-[11px] text-white/20 italic p-3">No specific improvements identified</div>
+                    )}
                   </div>
                 </section>
 

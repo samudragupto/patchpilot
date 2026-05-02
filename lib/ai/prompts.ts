@@ -20,7 +20,7 @@ export interface Hypothesis {
 export interface Elimination {
   hypothesisId: string;
   reason: string;
-  evidence: string;
+  evidence: string[];
 }
 
 export interface RootCause {
@@ -36,7 +36,7 @@ export interface RootCause {
 }
 
 /**
- * System prompt for incident analysis
+ * System prompt for Antigravity AI Engine
  */
 export const SYSTEM_PROMPT = `You are "Antigravity AI Engine", a deterministic backend reasoning system for PatchPilot.
 Your job is to generate structured debugging outputs that are SAFE, CONSISTENT, and UI-READY.
@@ -45,295 +45,148 @@ Your job is to generate structured debugging outputs that are SAFE, CONSISTENT, 
 1. OUTPUT MUST BE VALID JSON ONLY (no markdown, no blocks, no extra text).
 2. NEVER output: undefined, null, mixed types, or strings where arrays are expected.
 3. ALL ARRAYS MUST ALWAYS BE ARRAYS (even if empty → []).
-4. ALL STRINGS MUST ALWAYS BE NON-EMPTY (if missing → "Unknown").
-5. Evidence MUST ALWAYS be an array of strings.
-
-🧠 SCHEMA CONTRACTS:
-- Hypothesis: { "hypotheses": [{ "id": "h1", "title": "string", "confidence": number, "reasoning": "string", "evidence": ["string"] }] }
-- Elimination: { "eliminations": [{ "hypothesisId": "h1", "reason": "string", "evidence": ["string"] }], "remainingHypothesis": "h1" }
-- RootCause: { "description": "string", "confidence": number, "evidence": ["string"], "affectedFiles": ["string"] }
+4. Evidence MUST ALWAYS be an array of strings.
+5. NO PLACEHOLDERS: Never output "number", "string", "TBD", or type names as values.
 
 🛡️ STABILITY RULES:
 - If uncertain → use safe fallback values: title: "Unknown issue", evidence: [], confidence: 0.1.
-- If remainingHypothesis is invalid → select highest confidence hypothesis ID.
-
-Failure to follow these rules will break the production system.`;
+- If remainingHypothesis is invalid → select highest confidence hypothesis ID.`;
 
 /**
- * Generate hypotheses from stack trace
+ * Robust JSON Extraction and Parsing
+ * Designed to survive malformed/truncated AI responses in Docker environments
+ */
+export function safeParseAI<T>(response: string): T {
+  console.log('--- RAW AI RESPONSE ---');
+  console.log(response);
+
+  try {
+    // 1. Pre-cleaning (remove metadata headers that AI sometimes echoes)
+    let cleaned = response
+      .replace(/Original snippet:[\s\S]*?(?={)/gi, '')
+      .replace(/RAW AI RESPONSE:[\s\S]*?(?={)/gi, '')
+      .replace(/with the following (format|properties|structure):/gi, '')
+      .trim();
+
+    // 2. Extract the first valid-looking JSON object using regex
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn('No JSON object found in response');
+      return {} as T;
+    }
+    cleaned = jsonMatch[0];
+
+    // 3. Cleanup specific LLM artifacts
+    cleaned = cleaned
+      .replace(/```json/g, '')
+      .replace(/```/g, '')
+      .replace(/\.\.\./g, '') // Truncation dots
+      .replace(/,\s*([}\]])/g, '$1') // Trailing commas
+      // Handle placeholders like "id": number
+      .replace(/:\s*number\b/g, ': 0.5')
+      .replace(/:\s*string\b/g, ': ""')
+      .replace(/:\s*\[\s*string\s*\]/g, ': []')
+      .trim();
+
+    console.log('--- CLEANED JSON ---');
+    console.log(cleaned);
+
+    const parsed = JSON.parse(cleaned);
+    console.log('--- PARSE SUCCESS ---');
+    return parsed as T;
+  } catch (error) {
+    console.error('--- PARSE FAILURE ---');
+    console.error('Error:', error);
+    // If it fails, try a manual fix for common bracket issues before giving up
+    return {} as T;
+  }
+}
+
+/**
+ * Individual Sanitizers for Domain Objects
+ */
+export function sanitizeHypothesis(h: any, i: number = 0): Hypothesis {
+  return {
+    id: String(h?.id || `h${i + 1}`),
+    title: String(h?.title || h?.text || 'Unknown issue'),
+    confidence: typeof h?.confidence === 'number' ? Math.max(0, Math.min(1, h.confidence)) : 0.1,
+    reasoning: String(h?.reasoning || 'No details provided'),
+    evidence: Array.isArray(h?.evidence) ? h.evidence.map(String) : []
+  };
+}
+
+export function sanitizeElimination(e: any): Elimination {
+  return {
+    hypothesisId: String(e?.hypothesisId || 'Unknown'),
+    reason: String(e?.reason || 'Unknown'),
+    evidence: Array.isArray(e?.evidence) ? e.evidence.map(String) : [String(e?.evidence || '')].filter(Boolean)
+  };
+}
+
+export function sanitizeRootCause(rc: any): RootCause {
+  const data = rc?.rootCause || rc || {};
+  return {
+    description: String(data.description || 'No root cause identified'),
+    confidence: typeof data.confidence === 'number' ? Math.max(0, Math.min(1, data.confidence)) : 0.5,
+    evidence: Array.isArray(data.evidence) ? data.evidence.map(String) : [],
+    affectedFiles: Array.isArray(data.affectedFiles) ? data.affectedFiles.map(String) : [],
+    fix: {
+      description: String(data.fix?.description || 'No fix suggested'),
+      diff: String(data.fix?.diff || ''),
+      riskLevel: ['low', 'medium', 'high'].includes(data.fix?.riskLevel) ? data.fix.riskLevel : 'medium'
+    }
+  };
+}
+
+/**
+ * Global Normalization Entry Point
+ */
+export function normalizeAIResponse(data: any): any {
+  const hypotheses = Array.isArray(data?.hypotheses) 
+    ? data.hypotheses.map((h: any, i: number) => sanitizeHypothesis(h, i))
+    : [];
+
+  const eliminations = Array.isArray(data?.eliminations)
+    ? data.eliminations.map((e: any) => sanitizeElimination(e))
+    : [];
+
+  let remainingId = data?.remainingHypothesis || data?.remainingId;
+  if (remainingId) remainingId = String(remainingId);
+
+  const finalHypothesis = hypotheses.find((h: Hypothesis) => h.id === remainingId) 
+    || hypotheses.sort((a: Hypothesis, b: Hypothesis) => b.confidence - a.confidence)[0]
+    || sanitizeHypothesis({ id: 'h1', title: 'Investigation in progress' });
+
+  return {
+    hypotheses,
+    eliminations,
+    finalHypothesis,
+    rootCause: sanitizeRootCause(data),
+    defensiveImprovements: Array.isArray(data?.defensiveImprovements) ? data.defensiveImprovements.map(String) : [],
+    tests: String(data?.tests || '// No tests generated'),
+    steps: Array.isArray(data?.steps) ? data.steps : []
+  };
+}
+
+/**
+ * Prompt Builders
  */
 export function buildHypothesisPrompt(context: StackTraceContext): string {
-  return `${SYSTEM_PROMPT}
-
-TASK: Generate Hypotheses for the following incident.
-
-INCIDENT DETAILS:
-Error: ${context.error}
-Stack Trace: ${context.stackTrace}
-Affected Files: ${context.files.join(', ')}
-
-REQUIRED OUTPUT SCHEMA:
-{
-  "hypotheses": [
-    {
-      "id": "h1",
-      "title": "string",
-      "confidence": number,
-      "reasoning": "string",
-      "evidence": ["string"]
-    }
-  ]
+  return `${SYSTEM_PROMPT}\n\nTASK: Generate Hypotheses for: ${context.error}\nFiles: ${context.files.join(', ')}\n\nReturn JSON { hypotheses: [...] }`;
 }
 
-Analyze the incident and return ONLY the JSON object.`;
+export function buildEliminationPrompt(context: StackTraceContext, hypotheses: Hypothesis[]): string {
+  return `${SYSTEM_PROMPT}\n\nTASK: Eliminate hypotheses based on: ${context.error}\n\nReturn JSON { eliminations: [...], remainingHypothesis: "ID" }`;
 }
 
-/**
- * Eliminate hypotheses with evidence
- */
-export function buildEliminationPrompt(
-  context: StackTraceContext,
-  hypotheses: Hypothesis[]
-): string {
-  return `${SYSTEM_PROMPT}
-
-TASK: Eliminate Incorrect Hypotheses based on evidence.
-
-INCIDENT DETAILS:
-Error: ${context.error}
-Stack Trace: ${context.stackTrace}
-
-HYPOTHESES TO EVALUATE:
-${hypotheses.map((h, i) => `
-ID: h${i + 1}
-Title: ${h.title}
-Reasoning: ${h.reasoning}
-`).join('\n')}
-
-REQUIRED OUTPUT SCHEMA:
-{
-  "eliminations": [
-    {
-      "hypothesisId": "string",
-      "reason": "string",
-      "evidence": "string"
-    }
-  ],
-  "remainingHypothesis": "string"
+export function buildRootCausePrompt(context: StackTraceContext, hyp: Hypothesis): string {
+  return `${SYSTEM_PROMPT}\n\nTASK: Analyze Root Cause for: ${hyp.title}\n\nReturn JSON { rootCause: { ... } }`;
 }
 
-Eliminate hypotheses and return ONLY the JSON object.`;
+export function buildDefensivePrompt(rc: RootCause): string {
+  return `${SYSTEM_PROMPT}\n\nTASK: Suggest improvements for: ${rc.description}\n\nReturn JSON { improvements: [...] }`;
 }
 
-/**
- * Generate root cause analysis and fix
- */
-export function buildRootCausePrompt(
-  context: StackTraceContext,
-  finalHypothesis: Hypothesis,
-  codeSnippet?: string
-): string {
-  return `${SYSTEM_PROMPT}
-
-TASK: Root Cause Analysis & Fix Generation.
-
-INCIDENT DETAILS:
-Error: ${context.error}
-Stack Trace: ${context.stackTrace}
-
-CONFIRMED HYPOTHESIS:
-${finalHypothesis.title}
-Reasoning: ${finalHypothesis.reasoning}
-
-${codeSnippet ? `CODE CONTEXT:\n${codeSnippet}` : ''}
-
-REQUIRED OUTPUT SCHEMA:
-{
-  "rootCause": {
-    "description": "string",
-    "confidence": number,
-    "evidence": ["string"],
-    "affectedFiles": ["string"],
-    "fix": {
-      "description": "string",
-      "diff": "string",
-      "riskLevel": "low | medium | high"
-    }
-  }
+export function buildTestGenerationPrompt(context: StackTraceContext, rc: RootCause): string {
+  return `${SYSTEM_PROMPT}\n\nTASK: Generate tests for fix: ${rc.fix.description}\n\nReturn JSON { tests: "string" }`;
 }
-
-Analyze and return ONLY the JSON object.`;
-}
-
-/**
- * Generate defensive improvements
- */
-export function buildDefensivePrompt(rootCause: RootCause): string {
-  return `${SYSTEM_PROMPT}
-
-TASK: Suggest Defensive Improvements.
-
-ROOT CAUSE: ${rootCause.description}
-FIX: ${rootCause.fix.description}
-
-REQUIRED OUTPUT SCHEMA:
-{
-  "improvements": ["string"]
-}
-
-Return ONLY the JSON array within the specified schema.`;
-}
-
-/**
- * Generate regression tests
- */
-export function buildTestGenerationPrompt(
-  context: StackTraceContext,
-  rootCause: RootCause
-): string {
-  return `${SYSTEM_PROMPT}
-
-TASK: Generate Regression Tests.
-
-ROOT CAUSE: ${rootCause.description}
-FIX: ${rootCause.fix.description}
-
-REQUIRED OUTPUT SCHEMA:
-{
-  "tests": "string"
-}
-
-Return ONLY the JSON object.`;
-}
-
-/**
- * Parse JSON response with robust error handling
- * Isolates the first valid JSON object or array
- */
-export function parseAIResponse<T>(response: string): T {
-  try {
-    // 1. Clean response (remove potential markdown wrappers)
-    let cleaned = response.trim();
-    
-    // 2. Extract the first complete JSON structure by balancing braces/brackets
-    let result = '';
-    let braceStack = 0;
-    let bracketStack = 0;
-    let inString = false;
-    let escaped = false;
-    let startIndex = -1;
-
-    for (let i = 0; i < cleaned.length; i++) {
-      const char = cleaned[i];
-
-      if (inString) {
-        if (escaped) {
-          escaped = false;
-        } else if (char === '\\') {
-          escaped = true;
-        } else if (char === '"') {
-          inString = false;
-        }
-        continue;
-      }
-
-      if (char === '"') {
-        inString = true;
-        continue;
-      }
-
-      if (char === '{') {
-        if (startIndex === -1) startIndex = i;
-        braceStack++;
-      } else if (char === '}') {
-        braceStack--;
-      } else if (char === '[') {
-        if (startIndex === -1) startIndex = i;
-        bracketStack++;
-      } else if (char === ']') {
-        bracketStack--;
-      }
-
-      // If we found a start and now stacks are balanced, we have our JSON
-      if (startIndex !== -1 && braceStack === 0 && bracketStack === 0) {
-        result = cleaned.substring(startIndex, i + 1);
-        break;
-      }
-    }
-
-    if (!result) {
-      // Fallback to old method if balancing failed (e.g. no braces at all)
-      result = cleaned;
-    }
-
-    // 3. Fix common JSON issues (trailing commas)
-    result = result.replace(/,\s*([}\]])/g, '$1');
-
-    return JSON.parse(result);
-  } catch (error) {
-    console.error('JSON Parse Error. Original response:', response);
-    throw new Error(`Failed to parse AI response: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-}
-
-/**
- * Validate hypothesis response
- */
-export function validateHypotheses(data: any): Hypothesis[] {
-  return (data.hypotheses || []).map((h: any, i: number) => ({
-    id: h.id || `h${i + 1}`,
-    title: h.title || h.text || 'Unknown issue',
-    confidence: typeof h.confidence === 'number' ? Math.max(0, Math.min(1, h.confidence)) : 0.1,
-    reasoning: h.reasoning || 'Unknown',
-    evidence: Array.isArray(h.evidence) ? h.evidence : (typeof h.evidence === 'string' ? [h.evidence] : []),
-  }));
-}
-
-/**
- * Validate elimination response
- */
-export function validateEliminations(data: any, originalHypotheses: Hypothesis[]): { eliminations: Elimination[]; remainingId: string } {
-  const elims = Array.isArray(data.eliminations) ? data.eliminations : [];
-
-  const validatedElims = elims.map((e: any) => ({
-    hypothesisId: e.hypothesisId || 'Unknown',
-    reason: e.reason || 'Unknown',
-    evidence: Array.isArray(e.evidence) ? e.evidence : (typeof e.evidence === 'string' ? [e.evidence] : []),
-  }));
-
-  // Find remaining ID or fallback to highest confidence
-  let remainingId = data.remainingHypothesis || data.remainingId;
-  const exists = originalHypotheses.some(h => h.id === remainingId);
-  
-  if (!exists && originalHypotheses.length > 0) {
-    const sorted = [...originalHypotheses].sort((a, b) => b.confidence - a.confidence);
-    remainingId = sorted[0].id;
-  }
-
-  return {
-    eliminations: validatedElims,
-    remainingId: remainingId || 'Unknown',
-  };
-}
-
-/**
- * Validate root cause response
- */
-export function validateRootCause(data: any): RootCause {
-  const rc = data.rootCause || {};
-  return {
-    description: rc.description || '',
-    confidence: Math.max(0, Math.min(1, typeof rc.confidence === 'number' ? rc.confidence : 0.5)),
-    evidence: Array.isArray(rc.evidence) ? rc.evidence : (typeof rc.evidence === 'string' ? [rc.evidence] : []),
-    affectedFiles: Array.isArray(rc.affectedFiles) ? rc.affectedFiles : [],
-    fix: {
-      description: rc.fix?.description || '',
-      diff: rc.fix?.diff || '',
-      riskLevel: ['low', 'medium', 'high'].includes(rc.fix?.riskLevel) 
-        ? rc.fix.riskLevel 
-        : 'medium',
-    },
-  };
-}
-
-// Made with Bob

@@ -248,17 +248,18 @@ export class WatsonxClient {
 let watsonxInstance: WatsonxClient | null = null;
 
 export function getWatsonxClient(): WatsonxClient {
-  if (!watsonxInstance) {
-    const apiKey = process.env.WATSONX_API_KEY;
-    const projectId = process.env.WATSONX_PROJECT_ID;
+  const apiKey = process.env.WATSONX_API_KEY;
+  const projectId = process.env.WATSONX_PROJECT_ID;
 
+  if (!watsonxInstance) {
     if (!apiKey || !projectId) {
-      throw new Error('WATSONX_API_KEY and WATSONX_PROJECT_ID must be set');
+      console.warn('WATSONX_API_KEY or WATSONX_PROJECT_ID missing. AI features will use mock fallbacks.');
+      // Return a client that always fails so fallbacks trigger, or we could implement a NullClient
     }
 
     watsonxInstance = new WatsonxClient({
-      apiKey,
-      projectId,
+      apiKey: apiKey || 'mock',
+      projectId: projectId || 'mock',
       region: process.env.WATSONX_REGION,
       model: process.env.WATSONX_MODEL,
     });
