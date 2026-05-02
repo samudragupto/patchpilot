@@ -37,28 +37,73 @@ export class WatsonxClient {
   private maxRetries = 3;
   private retryDelay = 1000;
 
+  // IAM Token caching
+  private iamToken: string | null = null;
+  private tokenExpiresAt: number = 0;
+
   constructor(config: WatsonxConfig) {
     this.apiKey = config.apiKey;
     this.projectId = config.projectId;
-    this.model = config.model || 'ibm/granite-13b-chat-v2';
-    
-    const region = config.region || 'us-south';
+    this.model = config.model || 'meta-llama/llama-3-3-70b-instruct';
+
+    const region = config.region || 'eu-de';
     this.baseUrl = `https://${region}.ml.cloud.ibm.com/ml/v1/text/generation`;
   }
 
   /**
-   * Generate text with automatic retry logic
+   * Get IBM IAM Access Token
+   * Exchanges the API key for a bearer token
+   */
+  private async getIAMToken(): Promise<string> {
+    // Return cached token if still valid (with 60s buffer)
+    if (this.iamToken && Date.now() < this.tokenExpiresAt - 60000) {
+      return this.iamToken;
+    }
+
+    try {
+      const response = await fetch('https://iam.cloud.ibm.com/identity/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+        },
+        body: new URLSearchParams({
+          grant_type: 'urn:ibm:params:oauth:grant-type:apikey',
+          apikey: this.apiKey,
+        }).toString(),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`IAM Token exchange failed: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      this.iamToken = data.access_token;
+      // expires_in is in seconds, convert to absolute timestamp
+      this.tokenExpiresAt = Date.now() + (data.expires_in * 1000);
+
+      return this.iamToken!;
+    } catch (error) {
+      console.error('Error fetching IAM token:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate text with automatic retry logic and IAM auth
    */
   async generate(options: GenerateOptions): Promise<string> {
     const { prompt, maxTokens = 2048, temperature = 0.7, stopSequences = [] } = options;
 
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
+        const token = await this.getIAMToken();
         const response = await fetch(`${this.baseUrl}?version=2023-05-29`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.apiKey}`,
+            'Authorization': `Bearer ${token}`,
           },
           body: JSON.stringify({
             model_id: this.model,
@@ -74,6 +119,13 @@ export class WatsonxClient {
           }),
         });
 
+        if (response.status === 401) {
+          // Token might have expired unexpectedly, clear cache and retry
+          this.iamToken = null;
+          this.tokenExpiresAt = 0;
+          continue;
+        }
+
         if (!response.ok) {
           const error = await response.text();
           throw new Error(`Watsonx API error: ${response.status} - ${error}`);
@@ -83,7 +135,7 @@ export class WatsonxClient {
         return data.results[0]?.generated_text || '';
       } catch (error) {
         if (attempt === this.maxRetries - 1) throw error;
-        
+
         // Exponential backoff
         await new Promise(resolve => setTimeout(resolve, this.retryDelay * Math.pow(2, attempt)));
       }
@@ -93,16 +145,17 @@ export class WatsonxClient {
   }
 
   /**
-   * Generate with streaming support for real-time updates
+   * Generate with streaming support and IAM auth
    */
   async *generateStream(options: GenerateOptions): AsyncGenerator<string, void, unknown> {
     const { prompt, maxTokens = 2048, temperature = 0.7, stopSequences = [] } = options;
 
+    const token = await this.getIAMToken();
     const response = await fetch(`${this.baseUrl}_stream?version=2023-05-29`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        'Authorization': `Bearer ${token}`,
       },
       body: JSON.stringify({
         model_id: this.model,
@@ -119,6 +172,10 @@ export class WatsonxClient {
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        this.iamToken = null;
+        this.tokenExpiresAt = 0;
+      }
       throw new Error(`Watsonx streaming error: ${response.status}`);
     }
 
@@ -141,7 +198,7 @@ export class WatsonxClient {
           if (line.startsWith('data: ')) {
             const data = line.slice(6);
             if (data === '[DONE]') return;
-            
+
             try {
               const parsed = JSON.parse(data);
               if (parsed.results?.[0]?.generated_text) {
@@ -173,10 +230,10 @@ export class WatsonxClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      await this.generate({ 
-        prompt: 'Test', 
+      await this.generate({
+        prompt: 'Test',
         maxTokens: 10,
-        temperature: 0 
+        temperature: 0
       });
       return true;
     } catch {
@@ -194,7 +251,7 @@ export function getWatsonxClient(): WatsonxClient {
   if (!watsonxInstance) {
     const apiKey = process.env.WATSONX_API_KEY;
     const projectId = process.env.WATSONX_PROJECT_ID;
-    
+
     if (!apiKey || !projectId) {
       throw new Error('WATSONX_API_KEY and WATSONX_PROJECT_ID must be set');
     }

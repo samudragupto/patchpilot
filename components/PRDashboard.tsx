@@ -25,9 +25,9 @@ interface PRDashboardProps {
     blastRadius: string;
     affectedFiles: { file: string; score: number; reason: string }[];
     reasoning: {
-      hypotheses: { id: string; text: string; confidence: number }[];
+      hypotheses: { id: string; title: string; confidence: number; evidence: string[] }[];
       eliminations: { hypothesisId: string; reason: string; evidence: string }[];
-      finalHypothesis: { id: string; text: string; confidence: number; evidence: string[] };
+      finalHypothesis: { id: string; title: string; confidence: number; evidence: string[] };
     };
     executionFlow: {
       before: { step: string; result: string }[];
@@ -55,11 +55,11 @@ interface PRDashboardProps {
 type TabId = 'overview' | 'diff' | 'tests' | 'reasoning' | 'graph';
 
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
-  { id: 'overview',  label: 'Overview',     icon: <Target className="w-3.5 h-3.5" /> },
-  { id: 'reasoning', label: 'Reasoning',    icon: <Brain className="w-3.5 h-3.5" /> },
-  { id: 'graph',     label: 'Graph',        icon: <GitBranch className="w-3.5 h-3.5" /> },
-  { id: 'diff',      label: 'Patch',        icon: <FileCode2 className="w-3.5 h-3.5" /> },
-  { id: 'tests',     label: 'Tests',        icon: <TestTube2 className="w-3.5 h-3.5" /> },
+  { id: 'overview', label: 'Overview', icon: <Target className="w-3.5 h-3.5" /> },
+  { id: 'reasoning', label: 'Reasoning', icon: <Brain className="w-3.5 h-3.5" /> },
+  { id: 'graph', label: 'Graph', icon: <GitBranch className="w-3.5 h-3.5" /> },
+  { id: 'diff', label: 'Patch', icon: <FileCode2 className="w-3.5 h-3.5" /> },
+  { id: 'tests', label: 'Tests', icon: <TestTube2 className="w-3.5 h-3.5" /> },
 ];
 
 // ─── Execution Flow ──────────────────────────────────────────────────────────
@@ -134,38 +134,45 @@ function ReasoningChain({ reasoning }: { reasoning: PRDashboardProps['data']['re
           Generated Hypotheses
         </h4>
         <div className="space-y-2">
-          {reasoning.hypotheses.map((h, i) => {
+          {Array.isArray(reasoning?.hypotheses) && reasoning.hypotheses.map((h, i) => {
             const isEliminated = eliminatedIds.has(h.id);
-            const isFinal = h.id === reasoning.finalHypothesis.id;
+            const isFinal = h.id === reasoning?.finalHypothesis?.id;
             return (
               <motion.div
                 key={h.id}
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className={`flex items-start gap-3 p-3 rounded-lg border ${
-                  isFinal
+                className={`flex items-start gap-3 p-3 rounded-lg border ${isFinal
                     ? 'bg-green-500/8 border-green-500/20'
                     : isEliminated
-                    ? 'bg-red-500/5 border-red-500/10 opacity-50'
-                    : 'bg-white/[0.02] border-white/[0.06]'
-                }`}
+                      ? 'bg-red-500/5 border-red-500/10 opacity-50'
+                      : 'bg-white/[0.02] border-white/[0.06]'
+                  }`}
               >
-                <div className={`w-6 h-6 rounded flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-bold ${
-                  isFinal ? 'bg-green-500/20 text-green-400' :
-                  isEliminated ? 'bg-red-500/20 text-red-400' :
-                  'bg-white/5 text-white/30'
-                }`}>
+                <div className={`w-6 h-6 rounded flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-bold ${isFinal ? 'bg-green-500/20 text-green-400' :
+                    isEliminated ? 'bg-red-500/20 text-red-400' :
+                      'bg-white/5 text-white/30'
+                  }`}>
                   {h.id.toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className={`text-[12px] font-mono leading-relaxed ${
-                    isFinal ? 'text-green-300' :
-                    isEliminated ? 'text-white/30 line-through decoration-red-500/40' :
-                    'text-white/60'
-                  }`}>
-                    {h.text}
+                  <p className={`text-[12px] font-mono leading-relaxed ${isFinal ? 'text-green-300' :
+                      isEliminated ? 'text-white/30 line-through decoration-red-500/40' :
+                        'text-white/60'
+                    }`}>
+                    {h.title}
                   </p>
+                  {Array.isArray(h.evidence) && h.evidence.length > 0 && (
+                    <div className="mt-1.5 space-y-1">
+                      {h.evidence.map((ev, j) => (
+                        <div key={j} className="flex items-start gap-1.5 text-[10px]">
+                          <ArrowRight className={`w-2.5 h-2.5 mt-0.5 ${isEliminated ? 'text-red-500/30' : 'text-blue-500/50'}`} />
+                          <span className={isEliminated ? 'text-white/20' : 'text-white/40'}>{ev}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <ConfidenceBadge score={h.confidence} size="sm" />
@@ -185,7 +192,7 @@ function ReasoningChain({ reasoning }: { reasoning: PRDashboardProps['data']['re
           Elimination Evidence
         </h4>
         <div className="space-y-2">
-          {reasoning.eliminations.map((e, i) => (
+          {Array.isArray(reasoning?.eliminations) && reasoning.eliminations.map((e, i) => (
             <motion.div
               key={i}
               initial={{ opacity: 0, x: -10 }}
@@ -207,14 +214,16 @@ function ReasoningChain({ reasoning }: { reasoning: PRDashboardProps['data']['re
           Confirmed Root Cause
         </h4>
         <div className="p-4 rounded-xl bg-green-500/8 border border-green-500/20">
-          <p className="text-[13px] text-green-200 font-mono leading-relaxed mb-3">{reasoning.finalHypothesis.text}</p>
+          <p className="text-[13px] text-green-200 font-mono leading-relaxed mb-3">{reasoning?.finalHypothesis?.title || 'No hypothesis confirmed yet'}</p>
           <div className="space-y-1.5">
-            {reasoning.finalHypothesis.evidence.map((ev, i) => (
-              <div key={i} className="flex items-start gap-2 text-[11px]">
-                <ArrowRight className="w-3 h-3 text-green-500/60 shrink-0 mt-0.5" />
-                <span className="text-white/50 font-mono">{ev}</span>
-              </div>
-            ))}
+            {Array.isArray(reasoning?.finalHypothesis?.evidence) &&
+              reasoning.finalHypothesis.evidence.map((ev: string, i: number) => (
+                <div key={i} className="flex items-start gap-2 text-[11px]">
+                  <ArrowRight className="w-3 h-3 text-green-500/60 shrink-0 mt-0.5" />
+                  <span className="text-white/50 font-mono">{ev}</span>
+                </div>
+              ))
+            }
           </div>
         </div>
       </section>
@@ -363,9 +372,8 @@ export function PRDashboard({ data }: PRDashboardProps) {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`relative flex items-center gap-1.5 px-4 py-3 text-xs font-medium transition-colors ${
-                activeTab === tab.id ? 'text-white' : 'text-white/40 hover:text-white/60'
-              }`}
+              className={`relative flex items-center gap-1.5 px-4 py-3 text-xs font-medium transition-colors ${activeTab === tab.id ? 'text-white' : 'text-white/40 hover:text-white/60'
+                }`}
             >
               {tab.icon}
               {tab.label}

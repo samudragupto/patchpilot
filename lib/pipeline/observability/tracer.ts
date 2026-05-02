@@ -12,7 +12,7 @@
  * @module pipeline/observability/tracer
  */
 
-import { PipelinePhase } from '../types/index.js';
+import { PipelinePhase } from '../types';
 
 // ============================================================================
 // Types and Interfaces

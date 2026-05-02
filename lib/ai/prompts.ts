@@ -1,8 +1,3 @@
-/**
- * Structured prompts for IBM watsonx AI reasoning
- * Optimized for low latency and explainable outputs
- */
-
 export interface StackTraceContext {
   error: string;
   stackTrace: string;
@@ -16,9 +11,10 @@ export interface StackTraceContext {
 
 export interface Hypothesis {
   id: string;
-  text: string;
+  title: string;
   confidence: number;
   reasoning: string;
+  evidence: string[];
 }
 
 export interface Elimination {
@@ -42,16 +38,26 @@ export interface RootCause {
 /**
  * System prompt for incident analysis
  */
-export const SYSTEM_PROMPT = `You are an expert software engineer and debugging specialist. Your role is to analyze production incidents, generate hypotheses, eliminate incorrect ones through evidence-based reasoning, and identify root causes with fixes.
+export const SYSTEM_PROMPT = `You are "Antigravity AI Engine", a deterministic backend reasoning system for PatchPilot.
+Your job is to generate structured debugging outputs that are SAFE, CONSISTENT, and UI-READY.
 
-Key principles:
-1. Be systematic: Generate multiple hypotheses, then eliminate them one by one
-2. Be evidence-based: Every conclusion must be backed by concrete evidence
-3. Be precise: Reference specific files, line numbers, and code patterns
-4. Be explainable: Every reasoning step must be clear and auditable
-5. Be practical: Suggest fixes that are surgical, low-risk, and production-ready
+🚨 CRITICAL RULES (HARD ENFORCED):
+1. OUTPUT MUST BE VALID JSON ONLY (no markdown, no blocks, no extra text).
+2. NEVER output: undefined, null, mixed types, or strings where arrays are expected.
+3. ALL ARRAYS MUST ALWAYS BE ARRAYS (even if empty → []).
+4. ALL STRINGS MUST ALWAYS BE NON-EMPTY (if missing → "Unknown").
+5. Evidence MUST ALWAYS be an array of strings.
 
-Output format: Always respond with valid JSON matching the requested schema.`;
+🧠 SCHEMA CONTRACTS:
+- Hypothesis: { "hypotheses": [{ "id": "h1", "title": "string", "confidence": number, "reasoning": "string", "evidence": ["string"] }] }
+- Elimination: { "eliminations": [{ "hypothesisId": "h1", "reason": "string", "evidence": ["string"] }], "remainingHypothesis": "h1" }
+- RootCause: { "description": "string", "confidence": number, "evidence": ["string"], "affectedFiles": ["string"] }
+
+🛡️ STABILITY RULES:
+- If uncertain → use safe fallback values: title: "Unknown issue", evidence: [], confidence: 0.1.
+- If remainingHypothesis is invalid → select highest confidence hypothesis ID.
+
+Failure to follow these rules will break the production system.`;
 
 /**
  * Generate hypotheses from stack trace
@@ -59,45 +65,27 @@ Output format: Always respond with valid JSON matching the requested schema.`;
 export function buildHypothesisPrompt(context: StackTraceContext): string {
   return `${SYSTEM_PROMPT}
 
-## Task: Generate Hypotheses
+TASK: Generate Hypotheses for the following incident.
 
-Analyze this production incident and generate 3-5 hypotheses about the root cause.
-
-### Incident Details:
+INCIDENT DETAILS:
 Error: ${context.error}
-
-Stack Trace:
-${context.stackTrace}
-
+Stack Trace: ${context.stackTrace}
 Affected Files: ${context.files.join(', ')}
 
-${context.graphContext ? `
-Codebase Context:
-- ${context.graphContext.nodes} modules analyzed
-- ${context.graphContext.edges} dependencies mapped
-- ${context.graphContext.communities} module communities
-` : ''}
-
-### Instructions:
-1. Analyze the error message and stack trace
-2. Consider common patterns for this error type
-3. Think about async/await issues, race conditions, null checks, type mismatches
-4. Generate 3-5 distinct hypotheses ordered by likelihood
-5. Assign confidence scores (0.0-1.0) based on evidence strength
-
-### Output Format (JSON):
+REQUIRED OUTPUT SCHEMA:
 {
   "hypotheses": [
     {
       "id": "h1",
-      "text": "Brief hypothesis description",
-      "confidence": 0.85,
-      "reasoning": "Why this is likely based on the evidence"
+      "title": "string",
+      "confidence": number,
+      "reasoning": "string",
+      "evidence": ["string"]
     }
   ]
 }
 
-Generate hypotheses now:`;
+Analyze the incident and return ONLY the JSON object.`;
 }
 
 /**
@@ -109,42 +97,32 @@ export function buildEliminationPrompt(
 ): string {
   return `${SYSTEM_PROMPT}
 
-## Task: Eliminate Incorrect Hypotheses
+TASK: Eliminate Incorrect Hypotheses based on evidence.
 
-You previously generated these hypotheses. Now eliminate the incorrect ones through evidence-based reasoning.
-
-### Incident Details:
+INCIDENT DETAILS:
 Error: ${context.error}
-Stack Trace:
-${context.stackTrace}
+Stack Trace: ${context.stackTrace}
 
-### Hypotheses to Evaluate:
-${hypotheses.map(h => `
-**${h.id.toUpperCase()}** (confidence: ${h.confidence})
-${h.text}
+HYPOTHESES TO EVALUATE:
+${hypotheses.map((h, i) => `
+ID: h${i + 1}
+Title: ${h.title}
 Reasoning: ${h.reasoning}
 `).join('\n')}
 
-### Instructions:
-1. For each hypothesis, look for evidence that contradicts it
-2. Consider: error type, timing, affected modules, common patterns
-3. Eliminate hypotheses that don't match the evidence
-4. Keep the most likely hypothesis (highest confidence + strongest evidence)
-5. Be specific about WHY each hypothesis is eliminated
-
-### Output Format (JSON):
+REQUIRED OUTPUT SCHEMA:
 {
   "eliminations": [
     {
-      "hypothesisId": "h1",
-      "reason": "Brief reason for elimination",
-      "evidence": "Specific evidence that contradicts this hypothesis"
+      "hypothesisId": "string",
+      "reason": "string",
+      "evidence": "string"
     }
   ],
-  "remainingHypothesis": "h2"
+  "remainingHypothesis": "string"
 }
 
-Eliminate hypotheses now:`;
+Eliminate hypotheses and return ONLY the JSON object.`;
 }
 
 /**
@@ -157,55 +135,34 @@ export function buildRootCausePrompt(
 ): string {
   return `${SYSTEM_PROMPT}
 
-## Task: Root Cause Analysis & Fix Generation
+TASK: Root Cause Analysis & Fix Generation.
 
-Based on the confirmed hypothesis, provide a detailed root cause analysis and generate a fix.
-
-### Incident Details:
+INCIDENT DETAILS:
 Error: ${context.error}
-Stack Trace:
-${context.stackTrace}
+Stack Trace: ${context.stackTrace}
 
-### Confirmed Hypothesis:
-${finalHypothesis.text}
-Confidence: ${finalHypothesis.confidence}
+CONFIRMED HYPOTHESIS:
+${finalHypothesis.title}
 Reasoning: ${finalHypothesis.reasoning}
 
-${codeSnippet ? `
-### Code Context:
-\`\`\`
-${codeSnippet}
-\`\`\`
-` : ''}
+${codeSnippet ? `CODE CONTEXT:\n${codeSnippet}` : ''}
 
-### Instructions:
-1. Explain the root cause in detail (what, why, how)
-2. List concrete evidence supporting this conclusion
-3. Identify all affected files
-4. Generate a surgical fix (minimal changes, low risk)
-5. Provide a unified diff format
-6. Assess risk level (low/medium/high)
-7. Explain why this fix resolves the issue
-
-### Output Format (JSON):
+REQUIRED OUTPUT SCHEMA:
 {
   "rootCause": {
-    "description": "Detailed explanation of what went wrong and why",
-    "confidence": 0.91,
-    "evidence": [
-      "Evidence point 1",
-      "Evidence point 2"
-    ],
-    "affectedFiles": ["file1.ts", "file2.ts"],
+    "description": "string",
+    "confidence": number,
+    "evidence": ["string"],
+    "affectedFiles": ["string"],
     "fix": {
-      "description": "What the fix does and why it works",
-      "diff": "--- a/file.ts\\n+++ b/file.ts\\n@@ -10,5 +10,5 @@\\n-old line\\n+new line",
-      "riskLevel": "low"
+      "description": "string",
+      "diff": "string",
+      "riskLevel": "low | medium | high"
     }
   }
 }
 
-Generate root cause analysis now:`;
+Analyze and return ONLY the JSON object.`;
 }
 
 /**
@@ -214,33 +171,17 @@ Generate root cause analysis now:`;
 export function buildDefensivePrompt(rootCause: RootCause): string {
   return `${SYSTEM_PROMPT}
 
-## Task: Suggest Defensive Improvements
+TASK: Suggest Defensive Improvements.
 
-Based on this root cause, suggest 3-5 defensive improvements to prevent similar issues.
+ROOT CAUSE: ${rootCause.description}
+FIX: ${rootCause.fix.description}
 
-### Root Cause:
-${rootCause.description}
-
-### Current Fix:
-${rootCause.fix.description}
-
-### Instructions:
-1. Think beyond the immediate fix
-2. Consider: input validation, error handling, logging, monitoring
-3. Suggest improvements that catch similar issues early
-4. Keep suggestions practical and implementable
-5. Order by impact (highest first)
-
-### Output Format (JSON):
+REQUIRED OUTPUT SCHEMA:
 {
-  "improvements": [
-    "Add session integrity validation to detect corrupted data",
-    "Implement circuit breaker for database operations",
-    "Add structured logging for auth flow debugging"
-  ]
+  "improvements": ["string"]
 }
 
-Generate improvements now:`;
+Return ONLY the JSON array within the specified schema.`;
 }
 
 /**
@@ -252,47 +193,85 @@ export function buildTestGenerationPrompt(
 ): string {
   return `${SYSTEM_PROMPT}
 
-## Task: Generate Regression Tests
+TASK: Generate Regression Tests.
 
-Create comprehensive test cases that would have caught this bug.
+ROOT CAUSE: ${rootCause.description}
+FIX: ${rootCause.fix.description}
 
-### Root Cause:
-${rootCause.description}
-
-### Fix Applied:
-${rootCause.fix.description}
-
-### Instructions:
-1. Generate 3-5 test cases covering:
-   - The exact bug scenario
-   - Edge cases
-   - Concurrent/race conditions if applicable
-   - Error handling paths
-2. Use Jest/TypeScript syntax
-3. Include setup, execution, and assertions
-4. Add descriptive test names
-5. Mock external dependencies
-
-### Output Format (JSON):
+REQUIRED OUTPUT SCHEMA:
 {
-  "tests": "// Full test file content as a string\\nimport { describe, it, expect } from 'jest';\\n..."
+  "tests": "string"
 }
 
-Generate tests now:`;
+Return ONLY the JSON object.`;
 }
 
 /**
- * Parse JSON response with error handling
+ * Parse JSON response with robust error handling
+ * Isolates the first valid JSON object or array
  */
 export function parseAIResponse<T>(response: string): T {
   try {
-    // Extract JSON from markdown code blocks if present
-    const jsonMatch = response.match(/```json\n([\s\S]*?)\n```/) || 
-                     response.match(/```\n([\s\S]*?)\n```/);
+    // 1. Clean response (remove potential markdown wrappers)
+    let cleaned = response.trim();
     
-    const jsonStr = jsonMatch ? jsonMatch[1] : response;
-    return JSON.parse(jsonStr.trim());
+    // 2. Extract the first complete JSON structure by balancing braces/brackets
+    let result = '';
+    let braceStack = 0;
+    let bracketStack = 0;
+    let inString = false;
+    let escaped = false;
+    let startIndex = -1;
+
+    for (let i = 0; i < cleaned.length; i++) {
+      const char = cleaned[i];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === '\\') {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+
+      if (char === '{') {
+        if (startIndex === -1) startIndex = i;
+        braceStack++;
+      } else if (char === '}') {
+        braceStack--;
+      } else if (char === '[') {
+        if (startIndex === -1) startIndex = i;
+        bracketStack++;
+      } else if (char === ']') {
+        bracketStack--;
+      }
+
+      // If we found a start and now stacks are balanced, we have our JSON
+      if (startIndex !== -1 && braceStack === 0 && bracketStack === 0) {
+        result = cleaned.substring(startIndex, i + 1);
+        break;
+      }
+    }
+
+    if (!result) {
+      // Fallback to old method if balancing failed (e.g. no braces at all)
+      result = cleaned;
+    }
+
+    // 3. Fix common JSON issues (trailing commas)
+    result = result.replace(/,\s*([}\]])/g, '$1');
+
+    return JSON.parse(result);
   } catch (error) {
+    console.error('JSON Parse Error. Original response:', response);
     throw new Error(`Failed to parse AI response: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
@@ -301,33 +280,39 @@ export function parseAIResponse<T>(response: string): T {
  * Validate hypothesis response
  */
 export function validateHypotheses(data: any): Hypothesis[] {
-  if (!data.hypotheses || !Array.isArray(data.hypotheses)) {
-    throw new Error('Invalid hypotheses format');
-  }
-
-  return data.hypotheses.map((h: any) => ({
-    id: h.id || `h${Math.random().toString(36).substr(2, 9)}`,
-    text: h.text || '',
-    confidence: Math.max(0, Math.min(1, h.confidence || 0.5)),
-    reasoning: h.reasoning || '',
+  return (data.hypotheses || []).map((h: any, i: number) => ({
+    id: h.id || `h${i + 1}`,
+    title: h.title || h.text || 'Unknown issue',
+    confidence: typeof h.confidence === 'number' ? Math.max(0, Math.min(1, h.confidence)) : 0.1,
+    reasoning: h.reasoning || 'Unknown',
+    evidence: Array.isArray(h.evidence) ? h.evidence : (typeof h.evidence === 'string' ? [h.evidence] : []),
   }));
 }
 
 /**
  * Validate elimination response
  */
-export function validateEliminations(data: any): { eliminations: Elimination[]; remainingId: string } {
-  if (!data.eliminations || !Array.isArray(data.eliminations)) {
-    throw new Error('Invalid eliminations format');
+export function validateEliminations(data: any, originalHypotheses: Hypothesis[]): { eliminations: Elimination[]; remainingId: string } {
+  const elims = Array.isArray(data.eliminations) ? data.eliminations : [];
+
+  const validatedElims = elims.map((e: any) => ({
+    hypothesisId: e.hypothesisId || 'Unknown',
+    reason: e.reason || 'Unknown',
+    evidence: Array.isArray(e.evidence) ? e.evidence : (typeof e.evidence === 'string' ? [e.evidence] : []),
+  }));
+
+  // Find remaining ID or fallback to highest confidence
+  let remainingId = data.remainingHypothesis || data.remainingId;
+  const exists = originalHypotheses.some(h => h.id === remainingId);
+  
+  if (!exists && originalHypotheses.length > 0) {
+    const sorted = [...originalHypotheses].sort((a, b) => b.confidence - a.confidence);
+    remainingId = sorted[0].id;
   }
 
   return {
-    eliminations: data.eliminations.map((e: any) => ({
-      hypothesisId: e.hypothesisId || '',
-      reason: e.reason || '',
-      evidence: e.evidence || '',
-    })),
-    remainingId: data.remainingHypothesis || data.remainingId || '',
+    eliminations: validatedElims,
+    remainingId: remainingId || 'Unknown',
   };
 }
 
@@ -335,15 +320,11 @@ export function validateEliminations(data: any): { eliminations: Elimination[]; 
  * Validate root cause response
  */
 export function validateRootCause(data: any): RootCause {
-  if (!data.rootCause) {
-    throw new Error('Invalid root cause format');
-  }
-
-  const rc = data.rootCause;
+  const rc = data.rootCause || {};
   return {
     description: rc.description || '',
-    confidence: Math.max(0, Math.min(1, rc.confidence || 0.5)),
-    evidence: Array.isArray(rc.evidence) ? rc.evidence : [],
+    confidence: Math.max(0, Math.min(1, typeof rc.confidence === 'number' ? rc.confidence : 0.5)),
+    evidence: Array.isArray(rc.evidence) ? rc.evidence : (typeof rc.evidence === 'string' ? [rc.evidence] : []),
     affectedFiles: Array.isArray(rc.affectedFiles) ? rc.affectedFiles : [],
     fix: {
       description: rc.fix?.description || '',

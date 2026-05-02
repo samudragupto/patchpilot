@@ -16,7 +16,7 @@ import {
   PipelinePhase,
   PipelineContext,
   PhaseResult,
-} from '../types/index.js';
+} from '../types';
 
 // ============================================================================
 // Types and Interfaces

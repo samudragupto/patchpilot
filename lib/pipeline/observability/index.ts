@@ -19,17 +19,17 @@ import {
   PhaseResult,
   PipelineMetrics,
   ObservabilityConfig,
-} from '../types/index.js';
+} from '../types';
 
-import { MetricsCollector } from './metrics.js';
-import { PipelineLogger, LogLevel, LoggerConfig } from './logger.js';
-import { PipelineTracer, Span, SpanKind, Trace } from './tracer.js';
+import { MetricsCollector } from './metrics';
+import { PipelineLogger, LogLevel, LoggerConfig } from './logger';
+import { PipelineTracer, Span, SpanKind, Trace } from './tracer';
 
 // Re-export types and classes for convenience
-export { MetricsCollector } from './metrics.js';
-export { PipelineLogger, LogLevel } from './logger.js';
-export { PipelineTracer, SpanKind, SpanStatus } from './tracer.js';
-export type { Span, Trace } from './tracer.js';
+export { MetricsCollector } from './metrics';
+export { PipelineLogger, LogLevel } from './logger';
+export { PipelineTracer, SpanKind, SpanStatus } from './tracer';
+export type { Span, Trace } from './tracer';
 
 // ============================================================================
 // Observability Manager

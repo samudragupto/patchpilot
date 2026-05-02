@@ -84,7 +84,7 @@ export class AIReasoningEngine {
     );
 
     // Step 5: Generate root cause analysis
-    this.addStep('discovery', `✓ Confirmed: ${finalHypothesis.text}`, onStep, {
+    this.addStep('discovery', `✓ Confirmed: ${finalHypothesis.title}`, onStep, {
       confidence: finalHypothesis.confidence,
       files: context.files,
     });
@@ -155,7 +155,7 @@ export class AIReasoningEngine {
       for (const hyp of hypotheses) {
         this.addStep(
           'hypothesis',
-          `Hypothesis ${hyp.id.toUpperCase()}: ${hyp.text}`,
+          `Hypothesis ${hyp.id.toUpperCase()}: ${hyp.title}`,
           onStep,
           { confidence: hyp.confidence, metadata: { hypothesisId: hyp.id } }
         );
@@ -188,7 +188,7 @@ export class AIReasoningEngine {
       });
 
       const data = parseAIResponse(response);
-      const { eliminations, remainingId } = validateEliminations(data);
+      const { eliminations, remainingId } = validateEliminations(data, hypotheses);
 
       // Emit each elimination as a step
       for (const elim of eliminations) {
@@ -402,21 +402,24 @@ export class AIReasoningEngine {
     return [
       {
         id: 'h1',
-        text: 'JWT token expiration mismatch — server clock drift causing premature invalidation',
+        title: 'JWT token expiration mismatch — server clock drift causing premature invalidation',
         confidence: 0.45,
         reasoning: 'Error mentions token/session issues, clock drift is common',
+        evidence: ['NTP sync logs show 2s drift', 'JWT exp claim is within 5s of current time'],
       },
       {
         id: 'h2',
-        text: 'Async race condition in refreshToken() — db.sessions.find() not awaited',
+        title: 'Async race condition in refreshToken() — db.sessions.find() not awaited',
         confidence: 0.88,
         reasoning: 'TypeError on undefined suggests Promise not awaited',
+        evidence: ['auth.service.ts:48 missing await keyword', 'Promise object truthy check passes incorrectly'],
       },
       {
         id: 'h3',
-        text: 'Database connection pool exhaustion under concurrent refresh requests',
+        title: 'Database connection pool exhaustion under concurrent refresh requests',
         confidence: 0.32,
         reasoning: 'Could cause timeouts but error is synchronous',
+        evidence: ['Connection pool metrics show 95% utilization', 'Query latency spiking to 200ms'],
       },
     ];
   }

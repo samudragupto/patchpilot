@@ -45,9 +45,9 @@ export interface InvestigationStep {
 // ─── Reasoning Structure ────────────────────────────────
 
 export interface ReasoningChain {
-  hypotheses: { id: string; text: string; confidence: number }[];
+  hypotheses: { id: string; title: string; confidence: number; evidence: string[] }[];
   eliminations: { hypothesisId: string; reason: string; evidence: string }[];
-  finalHypothesis: { id: string; text: string; confidence: number; evidence: string[] };
+  finalHypothesis: { id: string; title: string; confidence: number; evidence: string[] };
 }
 
 // ─── Before/After Flow ──────────────────────────────────
@@ -108,18 +108,21 @@ function buildReasoningChain(): ReasoningChain {
     hypotheses: [
       {
         id: "h1",
-        text: "JWT token expiration mismatch — server clock drift causing premature invalidation",
+        title: "JWT token expiration mismatch — server clock drift causing premature invalidation",
         confidence: 0.45,
+        evidence: ["NTP sync logs show 2s drift", "JWT exp claim is within 5s of current time"],
       },
       {
         id: "h2",
-        text: "Async race condition in refreshToken() — db.sessions.find() not awaited, causing Promise object to be used as session data",
+        title: "Async race condition in refreshToken() — db.sessions.find() not awaited, causing Promise object to be used as session data",
         confidence: 0.88,
+        evidence: ["auth.service.ts:48 missing await keyword", "Promise object truthy check passes incorrectly"],
       },
       {
         id: "h3",
-        text: "Database connection pool exhaustion under concurrent refresh requests",
+        title: "Database connection pool exhaustion under concurrent refresh requests",
         confidence: 0.32,
+        evidence: ["Connection pool metrics show 95% utilization", "Query latency spiking to 200ms"],
       },
     ],
     eliminations: [
@@ -136,7 +139,7 @@ function buildReasoningChain(): ReasoningChain {
     ],
     finalHypothesis: {
       id: "h2",
-      text: "Race condition due to missing `await` on db.sessions.find() in auth.service.ts:48",
+      title: "Race condition due to missing `await` on db.sessions.find() in auth.service.ts:48",
       confidence: 0.91,
       evidence: [
         "db.sessions.find() returns Promise<Session | null>",
@@ -260,7 +263,7 @@ function generateMockInvestigationSteps(input: string): InvestigationStep[] {
   for (const hyp of reasoning.hypotheses) {
     steps.push({
       type: "hypothesis",
-      message: `Hypothesis ${hyp.id.toUpperCase()}: ${hyp.text}`,
+      message: `Hypothesis ${hyp.id.toUpperCase()}: ${hyp.title}`,
       timestamp: now + (t += 1400),
       confidence: hyp.confidence,
       metadata: { hypothesisId: hyp.id },
@@ -280,7 +283,7 @@ function generateMockInvestigationSteps(input: string): InvestigationStep[] {
   // Phase 7: Discovery
   steps.push({
     type: "discovery",
-    message: `✓ Confirmed: ${reasoning.finalHypothesis.text}`,
+    message: `✓ Confirmed: ${reasoning.finalHypothesis.title}`,
     timestamp: now + (t += 2000),
     confidence: reasoning.finalHypothesis.confidence,
     files: ["src/services/auth.service.ts"],

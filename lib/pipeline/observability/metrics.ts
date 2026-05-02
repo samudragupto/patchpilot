@@ -20,7 +20,7 @@ import {
   PerformanceMetrics,
   CostMetrics,
   QualityMetrics,
-} from '../types/index.js';
+} from '../types';
 
 // ============================================================================
 // Interfaces
