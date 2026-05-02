@@ -7,8 +7,15 @@ on:
 
 jobs:
   deploy:
+    # Trigger only when PR is closed AND merged into main
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    
+    env:
+      REGISTRY: icr.io
+      ICR_NAMESPACE: ${{ secrets.ICR_NAMESPACE }}
+      PROJECT_ID: ${{ secrets.IBM_CLOUD_PROJECT_ID }}
+      IAM_URL: https://iam.cloud.ibm.com
 
     steps:
       - name: Checkout Repository
@@ -16,45 +23,106 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install jq
-        run: sudo apt-get install -y jq
-
-      - name: Generate IAM Token
+      - name: Debug Workspace & Environment
         run: |
-          RESPONSE=$(curl -s -X POST "${{ vars.IAM_URL }}/identity/token" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${{ secrets.IBM_CLOUD_API_KEY }}")
-
-          TOKEN=$(echo $RESPONSE | jq -r '.access_token')
-
-          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
-            echo "IAM Token generation failed"
+          echo "Listing workspace files:"
+          ls -R
+          echo "Verifying Dockerfile presence:"
+          if [ -f "./Dockerfile" ]; then
+            echo "Dockerfile found at root."
+          else
+            echo "::error::Dockerfile NOT found at root!"
             exit 1
           fi
 
-          echo "IAM_TOKEN=$TOKEN" >> $GITHUB_ENV
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build & Push Docker Image to IBM Registry
+      - name: Login to IBM Cloud Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: iamapikey
+          password: ${{ secrets.IBM_CLOUD_API_KEY }}
+
+      - name: Generate IBM Cloud IAM Token
+        id: iam_token
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          echo "Requesting IAM Token from: ${{ env.IAM_URL }}/identity/token"
+          
+          # Retry logic for network resilience
+          for i in {1..3}; do
+            echo "Attempt $i of 3..."
+            
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.IAM_URL }}/identity/token" \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              -d "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=${{ secrets.IBM_CLOUD_API_KEY }}")
+            
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | head -n -1)
+            
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              TOKEN=$(echo "$BODY" | jq -r '.access_token // empty')
+              if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
+                echo "IAM_TOKEN=$TOKEN" >> $GITHUB_ENV
+                echo "::add-mask::$TOKEN"
+                echo "IAM token successfully generated."
+                exit 0
+              fi
+            fi
+            
+            echo "::warning::Attempt $i failed. HTTP Status: $HTTP_CODE. Response: $BODY"
+            sleep 5
+          done
+          
+          echo "::error::Failed to generate IAM token after 3 attempts."
+          exit 1
+
+      - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: true
           tags: |
-            ${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:latest
-            ${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.ICR_NAMESPACE }}/patchpilot:latest
+            ${{ env.REGISTRY }}/${{ env.ICR_NAMESPACE }}/patchpilot:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Trigger Code Engine Update (Correct Method)
+      - name: Trigger IBM Code Engine Deployment
+        shell: bash
         run: |
-          echo "Updating Code Engine application..."
-
-          curl -X POST \
-          "${{ vars.IBM_CLOUD_CODE_ENGINE_API }}/v2/projects/${{ secrets.IBM_CLOUD_PROJECT_ID }}/applications/patchpilot/revisions" \
-          -H "Authorization: Bearer $IAM_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"image\": \"${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:${{ github.sha }}\",
-            \"port\": 3000
-          }"
-
-      - name: Deployment Success
-        run: echo "PatchPilot deployed successfully "
+          set -euo pipefail
+          
+          # Resolve Code Engine API Endpoint (Region-specific)
+          REGION="${{ vars.IBM_CLOUD_REGION || 'us-south' }}"
+          CE_API="https://api.${REGION}.codeengine.cloud.ibm.com"
+          
+          echo "Deploying to Code Engine at $CE_API for project ${{ env.PROJECT_ID }}..."
+          
+          # Patch application to trigger a new revision with the new image
+          DEPLOY_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "$CE_API/v2/projects/${{ env.PROJECT_ID }}/applications/patchpilot/revisions" \
+            -H "Authorization: Bearer $IAM_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"image\": \"${{ env.REGISTRY }}/${{ env.ICR_NAMESPACE }}/patchpilot:${{ github.sha }}\",
+              \"port\": 3000
+            }")
+          
+          HTTP_CODE=$(echo "$DEPLOY_RESPONSE" | tail -n1)
+          BODY=$(echo "$DEPLOY_RESPONSE" | head -n -1)
+          
+          echo "Deployment Status Code: $HTTP_CODE"
+          echo "Deployment Response: $BODY"
+          
+          if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
+            echo "::error::Code Engine deployment failed with status $HTTP_CODE"
+            exit 1
+          fi
+          
+          echo "PatchPilot revision update successful."
