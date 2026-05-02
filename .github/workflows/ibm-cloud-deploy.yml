@@ -17,7 +17,15 @@ jobs:
           fetch-depth: 0
 
       - name: Install jq
-        run: sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      # 🔐 LOGIN TO IBM CONTAINER REGISTRY (MISSING IN YOUR VERSION)
+      - name: Login to IBM Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.IBM_CLOUD_REGION }}.icr.io
+          username: iamapikey
+          password: ${{ secrets.IBM_CLOUD_API_KEY }}
 
       - name: Generate IAM Token
         run: |
@@ -34,18 +42,19 @@ jobs:
 
           echo "IAM_TOKEN=$TOKEN" >> $GITHUB_ENV
 
-      - name: Build & Push Docker Image to IBM Registry
+      - name: Build & Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile   # 🔥 CRITICAL FIX
           push: true
           tags: |
             ${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:latest
             ${{ vars.IBM_CLOUD_REGION }}.icr.io/${{ secrets.ICR_NAMESPACE }}/patchpilot:${{ github.sha }}
 
-      - name: Trigger Code Engine Update (Correct Method)
+      - name: Trigger Code Engine Deployment
         run: |
-          echo "Updating Code Engine application..."
+          echo "Deploying to IBM Code Engine..."
 
           curl -X POST \
           "${{ vars.IBM_CLOUD_CODE_ENGINE_API }}/v2/projects/${{ secrets.IBM_CLOUD_PROJECT_ID }}/applications/patchpilot/revisions" \
@@ -57,4 +66,4 @@ jobs:
           }"
 
       - name: Deployment Success
-        run: echo "PatchPilot deployed successfully "
+        run: echo "PatchPilot deployed successfully 🚀"
