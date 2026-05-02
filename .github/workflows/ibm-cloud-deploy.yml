@@ -39,7 +39,7 @@ jobs:
       - name: Login to IBM Cloud Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.IBM_REGION }}.icr.io
+          registry: de.icr.io
           username: iamapikey
           password: ${{ secrets.IBM_CLOUD_API_KEY }}
 
