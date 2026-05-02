@@ -59,5 +59,3 @@ Thumbs.db
 # IBM Cloud / Deployment Artifacts
 .ibm-cloud/
 ce-config.yaml
-Dockerfile
-docker-compose.yaml
